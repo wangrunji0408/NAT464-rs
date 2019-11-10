@@ -1,15 +1,18 @@
 use smoltcp::wire::*;
 use smoltcp::Error;
 
-struct Translator {
-    local_prefix: Ipv6Address,
-    remote_prefix: Ipv6Address,
+#[cfg(test)]
+mod test;
+
+pub struct Translator {
+    pub local_prefix: Ipv6Address,
+    pub remote_prefix: Ipv6Address,
 }
 
 impl Translator {
     /// Translate IPv4 packet on `ipv4_buf` to IPv6 packet on `ipv6_buf`.
     /// Return the length of IPv6 packet.
-    fn ip_4to6(&self, ipv4_buf: &[u8], ipv6_buf: &mut [u8]) -> Result<usize, Error> {
+    pub fn ip_4to6(&self, ipv4_buf: &[u8], ipv6_buf: &mut [u8]) -> Result<usize, Error> {
         let ipv4 = Ipv4Packet::new_checked(ipv4_buf)?;
         let mut ipv6 = Ipv6Packet::new_unchecked(ipv6_buf);
 
