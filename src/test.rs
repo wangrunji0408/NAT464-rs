@@ -1,4 +1,6 @@
-use super::Translator;
+extern crate std;
+
+use crate::ip464::Translator;
 use pcap_file::*;
 use smoltcp::wire::*;
 use std::convert::TryInto;
