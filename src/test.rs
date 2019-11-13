@@ -4,6 +4,7 @@ use crate::ip464::Translator;
 use pcap_file::*;
 use smoltcp::wire::*;
 use std::convert::TryInto;
+use std::format;
 use std::fs::File;
 use std::path::Path;
 
@@ -20,34 +21,16 @@ fn create_pcap_out(name: &str) -> PcapWriter<File> {
     PcapWriter::with_header(header, file).expect("failed to create pcap writer")
 }
 
-#[test]
-fn udp() {
-    let pcap_in = open_pcap_in("udp_input.pcap");
-    let pcap_ans = open_pcap_in("udp_ans.pcap");
-    let mut pcap_out = create_pcap_out("udp_output.pcap");
+fn test46(name: &str) {
+    let pcap_in = open_pcap_in(&format!("{}_v4.pcap", name));
+    let pcap_ans = open_pcap_in(&format!("{}_v6.pcap", name));
+    let mut pcap_out = create_pcap_out(&format!("{}_v6.output.pcap", name));
     for (i, (packet_in, packet_ans)) in pcap_in.zip(pcap_ans).enumerate() {
         let packet_in = packet_in.unwrap();
         let packet_ans = packet_ans.unwrap();
         let frame = EthernetFrame::new_unchecked(&packet_in.data);
-        let ipv4_buf = {
-            let mut type_ = frame.ethertype();
-            let mut payload = frame.payload();
-            loop {
-                match type_ {
-                    EthernetProtocol::Ipv4 => break payload,
-                    EthernetProtocol::Unknown(0x8100) => {
-                        // 802.1Q
-                        type_ = EthernetProtocol::from(u16::from_be_bytes(
-                            payload[2..4].try_into().unwrap(),
-                        ));
-                        payload = &payload[4..];
-                    }
-                    EthernetProtocol::Ipv6 => unimplemented!("IPv6"),
-                    EthernetProtocol::Arp => unimplemented!("ARP"),
-                    EthernetProtocol::Unknown(t) => panic!("unknown ethernet type: {:#x}", t),
-                };
-            }
-        };
+        assert_eq!(frame.ethertype(), EthernetProtocol::Ipv4);
+        let ipv4_buf = frame.payload();
         let mut ipv6_buf = [0; 0x1000];
         let mut out_frame = EthernetFrame::new_unchecked(&mut ipv6_buf[..]);
         out_frame.set_src_addr(frame.src_addr());
@@ -58,13 +41,23 @@ fn udp() {
             local_prefix: Ipv6Address::new(0x2001, 0xdb8, 0x1, 0x4646, 0, 0, 0, 0),
             remote_prefix: Ipv6Address::new(0x2001, 0xdb8, 0x2, 0x4646, 0, 0, 0, 0),
         };
-        let res = ts.ip_4to6(ipv4_buf, out_frame.payload_mut());
-        if let Ok(mut len) = res {
-            len += 14; // ethernet frame header
-            assert_eq!(packet_ans.data.as_ref(), &ipv6_buf[..len]);
-            pcap_out
-                .write_packet(&Packet::new(i as u32, 0, len as u32, &ipv6_buf[..len]))
-                .expect("failed to write pcap packet");
-        }
+        let mut len = ts
+            .ip_4to6(ipv4_buf, out_frame.payload_mut())
+            .expect("failed to construct ipv6");
+        len += 14; // ethernet frame header
+        assert_eq!(packet_ans.data.as_ref(), &ipv6_buf[..len]);
+        pcap_out
+            .write_packet(&Packet::new(i as u32, 0, len as u32, &ipv6_buf[..len]))
+            .expect("failed to write pcap packet");
     }
+}
+
+#[test]
+fn udp46() {
+    test46("udp");
+}
+
+#[test]
+fn tcp46() {
+    test46("tcp");
 }
