@@ -1,35 +1,36 @@
 //! The core of Network Address Translation (NAT) logic
 
-use crate::hal::{HALResult, HAL};
+use crate::hal::{HALError, HALResult, HAL};
 use smoltcp::wire::*;
+use smoltcp::Error as NetError;
 
-struct NAT<H: HAL> {
-    hal: H,
-    ifaces: [IFaceConfig; 4],
+pub struct NAT<H: HAL> {
+    pub hal: H,
+    pub ifaces: [IFaceConfig; 4],
 }
 
-struct IFaceConfig {
-    mac: EthernetAddress,
-    ipv4: Ipv4Address,
-    ipv6: Ipv6Address,
+pub struct IFaceConfig {
+    pub mac: EthernetAddress,
+    pub ipv4: Ipv4Address,
+    pub ipv6: Ipv6Address,
 }
 
 impl<H: HAL> NAT<H> {
-    fn run(&mut self) -> HALResult<()> {
+    pub fn run(&mut self) -> NATResult<()> {
         loop {
             let mut recv_buf: [u8; 0x1000] =
                 unsafe { core::mem::MaybeUninit::uninit().assume_init() };
-            let metadata = self.hal.recv_packet(&mut recv_buf)?;
-            let frame = EthernetFrame::new_unchecked(&recv_buf[..]);
+            let meta = self.hal.recv_packet(&mut recv_buf)?;
+            let mut frame = EthernetFrame::new_unchecked(&mut recv_buf[..]);
             match frame.ethertype() {
                 EthernetProtocol::Arp => {
-                    self.process_arp(frame.payload());
+                    self.process_arp(meta.iface_id, frame.into_inner());
                 }
                 EthernetProtocol::Ipv4 => {
-                    self.process_ipv4(frame.payload());
+                    self.process_ipv4(frame.payload_mut());
                 }
                 EthernetProtocol::Ipv6 => {
-                    self.process_ipv6(frame.payload());
+                    self.process_ipv6(frame.payload_mut());
                 }
                 EthernetProtocol::Unknown(type_) => {
                     warn!("unknown ethernet type: {}", type_);
@@ -38,16 +39,70 @@ impl<H: HAL> NAT<H> {
         }
     }
 
-    fn process_arp(&mut self, arp_buf: &[u8]) {
-        let arp = ArpPacket::new_unchecked(arp_buf);
-        match arp.operation() {
-            ArpOperation::Request => {}
-            ArpOperation::Reply => {}
-            ArpOperation::Unknown(op) => {
-                warn!("unknown ARP operation: {}", op);
+    /// Process IPv4 ARP packet
+    fn process_arp(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        let mut frame = EthernetFrame::new_unchecked(recv_buf);
+        let mut arp = ArpPacket::new_checked(frame.payload_mut())?;
+        if let ArpRepr::EthernetIpv4 {
+            operation,
+            source_hardware_addr: src_mac,
+            source_protocol_addr: src_ipv4,
+            target_hardware_addr: dst_mac,
+            target_protocol_addr: dst_ipv4,
+        } = ArpRepr::parse(&arp)?
+        {
+            // update ARC for src
+            self.hal.arc_add_mac(IpAddress::Ipv4(src_ipv4), src_mac)?;
+
+            match operation {
+                ArpOperation::Request => {
+                    // reply (reuse input buffer)
+                    let iface = &self.ifaces[iface_id];
+                    arp.set_operation(ArpOperation::Reply);
+                    arp.set_source_hardware_addr(iface.mac.as_bytes());
+                    arp.set_source_protocol_addr(iface.ipv4.as_bytes());
+                    arp.set_target_hardware_addr(src_mac.as_bytes());
+                    arp.set_target_protocol_addr(src_ipv4.as_bytes());
+                    frame.set_dst_addr(frame.src_addr());
+                    frame.set_src_addr(iface.mac);
+                    self.hal.send_packet(iface_id, &frame.into_inner()[..42])?;
+                }
+                ArpOperation::Reply => {
+                    // update ARC for dst
+                    self.hal.arc_add_mac(IpAddress::Ipv4(dst_ipv4), dst_mac)?;
+                }
+                ArpOperation::Unknown(op) => {
+                    warn!("unknown ARP operation: {}", op);
+                    return Err(NATError::Netstack(NetError::Unrecognized));
+                }
             }
+        } else {
+            unreachable!()
         }
+        Ok(())
     }
+    /// Process IPv6 DNP packet
+    fn process_dnp(&mut self, dnp_buf: &[u8]) {}
     fn process_ipv4(&mut self, ipv4_buf: &[u8]) {}
     fn process_ipv6(&mut self, ipv6_buf: &[u8]) {}
+}
+
+pub type NATResult<T> = Result<T, NATError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NATError {
+    Netstack(NetError),
+    Hal(HALError),
+}
+
+impl From<NetError> for NATError {
+    fn from(e: NetError) -> Self {
+        NATError::Netstack(e)
+    }
+}
+
+impl From<HALError> for NATError {
+    fn from(e: HALError) -> Self {
+        NATError::Hal(e)
+    }
 }
