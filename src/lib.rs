@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(unsafe_code, unused_must_use)]
 
 #[macro_use]
 extern crate log;

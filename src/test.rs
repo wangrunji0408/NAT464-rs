@@ -112,7 +112,9 @@ impl HAL for TestHAL {
         buf[..12].copy_from_slice(&packet.data[..12]);
         buf[12..len].copy_from_slice(&packet.data[16..]);
         // echo
-        self.pcap_out.write_packet(&packet);
+        self.pcap_out
+            .write_packet(&packet)
+            .expect("failed to write packet");
         // return metadata
         Ok(Metadata {
             iface_id: get_iface_id(&packet.data),
@@ -130,7 +132,9 @@ impl HAL for TestHAL {
             header: packet.header,
             data: out_data.into(),
         };
-        self.pcap_out.write_packet(&out_packet);
+        self.pcap_out
+            .write_packet(&out_packet)
+            .expect("failed to write packet");
         assert_eq!(out_packet.data, packet.data);
         Ok(())
     }
@@ -139,23 +143,23 @@ impl HAL for TestHAL {
         unimplemented!()
     }
 
-    fn get_iface_mac(&self, iface_id: usize) -> HALResult<EthernetAddress> {
+    fn get_iface_mac(&self, _iface_id: usize) -> HALResult<EthernetAddress> {
         unimplemented!()
     }
 
-    fn amc_get(&self, ip: IpAddress) -> HALResult<&IpAddress> {
+    fn amc_get(&self, _ip: IpAddress) -> HALResult<&IpAddress> {
         unimplemented!()
     }
 
-    fn amc_add(&self, ip: IpAddress, new_ip: IpAddress) -> HALResult<()> {
+    fn amc_add(&self, _ip: IpAddress, _new_ip: IpAddress) -> HALResult<()> {
         unimplemented!()
     }
 
-    fn fib_get(&self, ip: IpAddress) -> HALResult<&IpAddress> {
+    fn fib_get(&self, _ip: IpAddress) -> HALResult<&IpAddress> {
         unimplemented!()
     }
 
-    fn fib_add(&mut self, ip: IpAddress, next_hop: IpAddress) -> HALResult<()> {
+    fn fib_add(&mut self, _ip: IpAddress, _next_hop: IpAddress) -> HALResult<()> {
         unimplemented!()
     }
 

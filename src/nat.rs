@@ -1,6 +1,6 @@
 //! The core of Network Address Translation (NAT) logic
 
-use crate::hal::{HALError, HALResult, HAL};
+use crate::hal::{HALError, HAL};
 use smoltcp::wire::*;
 use smoltcp::Error as NetError;
 
@@ -20,14 +20,13 @@ pub struct IFaceConfig {
 impl<H: HAL> NAT<H> {
     /// Infinitely run until some error happened.
     pub fn run(&mut self) -> NATResult<()> {
+        let mut recv_buf = [0u8; 0x1000];
         loop {
-            let mut recv_buf: [u8; 0x1000] =
-                unsafe { core::mem::MaybeUninit::uninit().assume_init() };
             let meta = self.hal.recv_packet(&mut recv_buf)?;
             let mut frame = EthernetFrame::new_unchecked(&mut recv_buf[..]);
             match frame.ethertype() {
                 EthernetProtocol::Arp => {
-                    self.process_arp(meta.iface_id, frame.into_inner());
+                    self.process_arp(meta.iface_id, frame.into_inner())?;
                 }
                 EthernetProtocol::Ipv4 => {
                     self.process_ipv4(frame.payload_mut());
@@ -84,12 +83,12 @@ impl<H: HAL> NAT<H> {
         }
         Ok(())
     }
-    /// Process IPv6 DNP packet
-    fn process_dnp(&mut self, dnp_buf: &[u8]) {}
+    /// Process IPv6 NDP packet
+    fn process_ndp(&mut self, _ndp_buf: &[u8]) {}
     /// Process IPv4 packet
-    fn process_ipv4(&mut self, ipv4_buf: &[u8]) {}
+    fn process_ipv4(&mut self, _ipv4_buf: &[u8]) {}
     /// Process IPv6 packet
-    fn process_ipv6(&mut self, ipv6_buf: &[u8]) {}
+    fn process_ipv6(&mut self, _ipv6_buf: &[u8]) {}
 }
 
 /// A specialized Result type for [`NAT`](struct.NAT.html).
