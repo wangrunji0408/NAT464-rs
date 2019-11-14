@@ -9,3 +9,6 @@ mod ip464;
 mod nat;
 #[cfg(test)]
 mod test;
+
+pub use hal::*;
+pub use nat::*;

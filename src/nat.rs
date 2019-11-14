@@ -4,11 +4,13 @@ use crate::hal::{HALError, HALResult, HAL};
 use smoltcp::wire::*;
 use smoltcp::Error as NetError;
 
+/// Network Address Translation (NAT).
 pub struct NAT<H: HAL> {
     pub hal: H,
     pub ifaces: [IFaceConfig; 4],
 }
 
+/// Configuration of a network interface.
 pub struct IFaceConfig {
     pub mac: EthernetAddress,
     pub ipv4: Ipv4Address,
@@ -16,6 +18,7 @@ pub struct IFaceConfig {
 }
 
 impl<H: HAL> NAT<H> {
+    /// Infinitely run until some error happened.
     pub fn run(&mut self) -> NATResult<()> {
         loop {
             let mut recv_buf: [u8; 0x1000] =
@@ -83,12 +86,16 @@ impl<H: HAL> NAT<H> {
     }
     /// Process IPv6 DNP packet
     fn process_dnp(&mut self, dnp_buf: &[u8]) {}
+    /// Process IPv4 packet
     fn process_ipv4(&mut self, ipv4_buf: &[u8]) {}
+    /// Process IPv6 packet
     fn process_ipv6(&mut self, ipv6_buf: &[u8]) {}
 }
 
+/// A specialized Result type for [`NAT`](struct.NAT.html).
 pub type NATResult<T> = Result<T, NATError>;
 
+/// The error type for [`NAT`](struct.NAT.html) object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NATError {
     Netstack(NetError),

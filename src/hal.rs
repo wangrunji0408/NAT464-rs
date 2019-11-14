@@ -26,16 +26,20 @@ pub trait HAL {
     fn arc_add_mac(&mut self, ip: IpAddress, mac: EthernetAddress) -> HALResult<()>;
 }
 
+/// A specialized Result type for [`HAL`](trait.HAL.html).
 pub type HALResult<T> = Result<T, HALError>;
 
-/// Error type of HAL functions
+/// The error type for [`HAL`](trait.HAL.html) functions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HALError {
     EndOfFile,
     NotFound,
 }
 
+/// The metadata of a received packet.
 pub struct Metadata {
+    /// The interface ID from which the packet came.
     pub iface_id: usize,
+    /// The length of the packet.
     pub len: usize,
 }
