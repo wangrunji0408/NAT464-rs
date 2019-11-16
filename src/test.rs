@@ -50,10 +50,10 @@ fn test46(name: &str) {
             .ip_4to6(ipv4_buf, out_frame.payload_mut())
             .expect("failed to construct ipv6");
         len += 14; // ethernet frame header
-        assert_eq!(packet_ans.data.as_ref(), &ipv6_buf[..len]);
         pcap_out
             .write_packet(&Packet::new(i as u32, 0, len as u32, &ipv6_buf[..len]))
             .expect("failed to write pcap packet");
+        assert_eq!(packet_ans.data.as_ref(), &ipv6_buf[..len]);
     }
 }
 
@@ -188,4 +188,9 @@ fn udp46() {
 #[test]
 fn tcp46() {
     test46("tcp");
+}
+
+#[test]
+fn icmp46() {
+    test46("icmp");
 }

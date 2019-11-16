@@ -129,7 +129,7 @@ impl Translator {
         // TODO: Incrementally update the checksum
         icmpv6.fill_checksum(&IpAddress::Ipv6(src_addr), &IpAddress::Ipv6(dst_addr));
 
-        Ok(icmpv6.header_len()) // TODO: check
+        Ok(icmpv6.header_len() + icmpv6.payload_mut().len())
     }
 
     /// Translate source `addr` from IPv4 to IPv6

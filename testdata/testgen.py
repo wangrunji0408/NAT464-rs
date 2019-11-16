@@ -1,5 +1,5 @@
-from scapy.layers.inet import IP, UDP, TCP
-from scapy.layers.inet6 import IPv6
+from scapy.layers.inet import ICMP
+from scapy.layers.inet6 import *
 from scapy.layers.l2 import Ether, ARP, Dot1Q
 from scapy.utils import wrpcap
 
@@ -15,23 +15,51 @@ IFACE_IPV4 = ['10.0.1.1', '10.0.2.1', '10.0.3.1', '10.0.4.1']
 #   vlan: iface ID
 IN, OUT = 0, 1
 
+# common header for IP464 test
+ETHER = Ether(src=IFACE_MAC[0], dst=IFACE_MAC[1])
+IPV4_HEADER = ETHER / IP(src='10.0.0.1', dst='10.0.0.2')
+IPV6_HEADER = ETHER / IPv6(src='2001:db8:1:4646::10.0.0.1', dst='2001:db8:2:4646::10.0.0.2')
+
 
 def gen_udp():
-    ether = Ether(src=IFACE_MAC[0], dst=IFACE_MAC[1])
     udp = UDP(sport=3333, dport=4444) / b'1234'
-    ins = [ether / IP(src='10.0.0.1', dst='10.0.0.2') / udp]
-    outs = [ether / IPv6(src='2001:db8:1:4646::10.0.0.1', dst='2001:db8:2:4646::10.0.0.2') / udp]
+    ins = [IPV4_HEADER / udp]
+    outs = [IPV6_HEADER / udp]
     wrpcap("udp_v4.pcap", ins)
     wrpcap("udp_v6.pcap", outs)
 
 
 def gen_tcp():
-    ether = Ether(src=IFACE_MAC[0], dst=IFACE_MAC[1])
     tcp = TCP(sport=3333, dport=4444) / b'1234'
-    ins = [ether / IP(src='10.0.0.1', dst='10.0.0.2') / tcp]
-    outs = [ether / IPv6(src='2001:db8:1:4646::10.0.0.1', dst='2001:db8:2:4646::10.0.0.2') / tcp]
+    ins = [IPV4_HEADER / tcp]
+    outs = [IPV6_HEADER / tcp]
     wrpcap("tcp_v4.pcap", ins)
     wrpcap("tcp_v6.pcap", outs)
+
+
+def gen_icmp():
+    icmps = [
+        (ICMP(type='echo-request') / b'hello',
+         ICMPv6EchoRequest() / b'hello'),
+        (ICMP(type='echo-reply') / b'hello',
+         ICMPv6EchoReply() / b'hello'),
+        (ICMP(type='time-exceeded', code='ttl-zero-during-transit'),
+         ICMPv6TimeExceeded(code='hop limit exceeded in transit')),
+        (ICMP(type='time-exceeded', code='ttl-zero-during-reassembly'),
+         ICMPv6TimeExceeded(code='fragment reassembly time exceeded')),
+        (ICMP(type='dest-unreach', code='network-unreachable'),
+         ICMPv6DestUnreach(code='No route to destination')),
+        (ICMP(type='dest-unreach', code='host-unreachable'),
+         ICMPv6DestUnreach(code='Address unreachable')),
+        (ICMP(type='dest-unreach', code='port-unreachable'),
+         ICMPv6DestUnreach(code='Port unreachable')),
+        (ICMP(type='dest-unreach', code='fragmentation-needed', nexthopmtu=1500),
+         ICMPv6PacketTooBig(mtu=1500)),
+    ]
+    ins = [IPV4_HEADER / icmpv4 for (icmpv4, _) in icmps]
+    outs = [IPV6_HEADER / icmpv6 for (_, icmpv6) in icmps]
+    wrpcap("icmp_v4.pcap", ins)
+    wrpcap("icmp_v6.pcap", outs)
 
 
 def gen_arp():
@@ -55,6 +83,7 @@ def gen_arp():
     wrpcap("arp.pcap", packets)
 
 
+gen_icmp()
 gen_udp()
 gen_tcp()
 gen_arp()
