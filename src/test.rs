@@ -107,6 +107,7 @@ struct TestHAL {
 impl HAL for TestHAL {
     fn recv_packet(&mut self, buf: &mut [u8]) -> HALResult<Metadata> {
         let packet = self.pcap_in.next().ok_or(HALError::EndOfFile)?.unwrap();
+        assert_eq!(packet.data[14], 0, "packet is not input");
         // copy packet without VLAN tag
         let len = packet.data.len() - 4;
         buf[..12].copy_from_slice(&packet.data[..12]);
@@ -126,7 +127,7 @@ impl HAL for TestHAL {
         let packet = self.pcap_in.next().ok_or(HALError::EndOfFile)?.unwrap();
         let mut out_data = Vec::new();
         out_data.extend(&buf[..12]);
-        out_data.extend(&[0x81, 0x00, 0x00, iface_id as u8]);
+        out_data.extend(&[0x81, 0x00, 0x10, iface_id as u8]);
         out_data.extend(&buf[12..]);
         let out_packet = Packet {
             header: packet.header,
