@@ -20,6 +20,7 @@ pub struct IFaceConfig {
 impl<H: HAL> NAT<H> {
     /// Infinitely run until some error happened.
     pub fn run(&mut self) -> NATResult<()> {
+        self.send_gratuitous_arps()?;
         let mut recv_buf = [0u8; 0x1000];
         loop {
             let meta = self.hal.recv_packet(&mut recv_buf)?;
@@ -39,6 +40,32 @@ impl<H: HAL> NAT<H> {
                 }
             }
         }
+    }
+
+    /// Send gratuitous ARP packet for each iface.
+    fn send_gratuitous_arps(&mut self) -> NATResult<()> {
+        const MAX_ARP_PACKET_LEN: usize = 42;
+        let mut send_buf = [0u8; MAX_ARP_PACKET_LEN];
+        for (iface_id, iface) in self.ifaces.iter().enumerate() {
+            let mut frame = EthernetFrame::new_unchecked(&mut send_buf[..]);
+            frame.set_src_addr(iface.mac);
+            frame.set_dst_addr(EthernetAddress::BROADCAST);
+            frame.set_ethertype(EthernetProtocol::Arp);
+
+            let mut arp = ArpPacket::new_unchecked(frame.payload_mut());
+            arp.set_operation(ArpOperation::Reply);
+            arp.set_hardware_type(ArpHardware::Ethernet);
+            arp.set_protocol_type(EthernetProtocol::Ipv4);
+            arp.set_hardware_len(6);
+            arp.set_protocol_len(4);
+            arp.set_source_hardware_addr(iface.mac.as_bytes());
+            arp.set_source_protocol_addr(iface.ipv4.as_bytes());
+            arp.set_target_hardware_addr(&[0u8; 6]);
+            arp.set_target_protocol_addr(iface.ipv4.as_bytes());
+
+            self.hal.send_packet(iface_id, &send_buf)?;
+        }
+        Ok(())
     }
 
     /// Process IPv4 ARP packet

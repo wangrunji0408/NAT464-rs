@@ -4,20 +4,10 @@ from scapy.layers.l2 import Ether, ARP, Dot1Q
 from scapy.utils import wrpcap
 
 
-def bytes2mac(b):
-    """
-    # Example
-    ```
-    bytes2mac(b'TWD2_0') == '54:57:44:32:5f:30'
-    ```
-    """
-    return ":".join(['%02x' % c for c in b])
-
-
 MAC_BROADCAST = 'ff:ff:ff:ff:ff:ff'
 MAC_ZERO = '00:00:00:00:00:00'
 
-IFACE_MAC = list(map(bytes2mac, [b'TWD2_0', b'TWD2_1', b'TWD2_2', b'TWD2_3']))
+IFACE_MAC = [b'TWD2_0', b'TWD2_1', b'TWD2_2', b'TWD2_3']
 IFACE_IPV4 = ['10.0.1.1', '10.0.2.1', '10.0.3.1', '10.0.4.1']
 
 
@@ -48,7 +38,7 @@ def gen_arp():
         ('out', gratuitous_arp(i, IFACE_MAC[i], IFACE_IPV4[i]))
         for i in range(4)
     ]
-    mac0 = bytes2mac(b'@WRJ_1')
+    mac0 = b'@WRJ_1'
     ip0 = '10.0.1.2'
     arps = [
         ('in', Ether(src=mac0, dst=MAC_BROADCAST) / Dot1Q(vlan=0)
