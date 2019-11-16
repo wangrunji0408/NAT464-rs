@@ -194,3 +194,8 @@ fn tcp46() {
 fn icmp46() {
     test46("icmp");
 }
+
+#[test]
+fn frag46() {
+    test46("frag");
+}

@@ -1,4 +1,4 @@
-from scapy.layers.inet import ICMP
+from scapy.layers.inet import ICMP, fragment
 from scapy.layers.inet6 import *
 from scapy.layers.l2 import Ether, ARP, Dot1Q
 from scapy.utils import wrpcap
@@ -62,6 +62,14 @@ def gen_icmp():
     wrpcap("icmp_v6.pcap", outs)
 
 
+def gen_frag():
+    payload = UDP(sport=3333, dport=4444) / ('G' * 4000)
+    ins = fragment(IPV4_HEADER / payload, fragsize=1480)
+    outs = fragment6(IPV6_HEADER / IPv6ExtHdrFragment(id=1) / payload, fragSize=1480 + 14 + 40 + 8)
+    wrpcap("frag_v4.pcap", ins)
+    wrpcap("frag_v6.pcap", outs)
+
+
 def gen_arp():
     def gratuitous_arp(iface, mac, ip):
         return Ether(src=mac, dst=MAC_BROADCAST) / Dot1Q(id=OUT, vlan=iface) \
@@ -86,4 +94,6 @@ def gen_arp():
 gen_icmp()
 gen_udp()
 gen_tcp()
+gen_frag()
+
 gen_arp()

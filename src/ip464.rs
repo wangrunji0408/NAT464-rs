@@ -61,6 +61,8 @@ impl Translator {
                     ipv6_payload.copy_from_slice(ipv4.payload());
                 }
             }
+        } else {
+            ipv6_payload.copy_from_slice(ipv4.payload());
         }
 
         Ok(ipv6.total_len())
@@ -86,7 +88,7 @@ impl Translator {
         let mut frag = Ipv6FragmentHeader::new_unchecked(ipv6.payload_mut());
         frag.clear_reserved();
         frag.set_next_header(ipv4.protocol());
-        frag.set_frag_offset(ipv4.frag_offset());
+        frag.set_frag_offset(ipv4.frag_offset() / 8);
         frag.set_more_frags(ipv4.more_frags());
         frag.set_ident(ipv4.ident() as u32);
         Ok(&mut ipv6.payload_mut()[IPV6_FRAG_HEADER_LEN..])
