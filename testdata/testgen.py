@@ -70,25 +70,40 @@ def gen_frag():
     wrpcap("frag_v6.pcap", outs)
 
 
-def gen_arp():
-    def gratuitous_arp(iface, mac, ip):
-        return Ether(src=mac, dst=MAC_BROADCAST) / Dot1Q(id=OUT, vlan=iface) \
-               / ARP(op='is-at', hwsrc=mac, psrc=ip, hwdst=MAC_ZERO, pdst=ip)
+def gratuitous_arp(iface, mac, ip):
+    return Ether(src=mac, dst=MAC_BROADCAST) / Dot1Q(id=OUT, vlan=iface) \
+           / ARP(op='is-at', hwsrc=mac, psrc=ip, hwdst=MAC_ZERO, pdst=ip)
 
-    gratuitous_arps = [
-        gratuitous_arp(i, IFACE_MAC[i], IFACE_IPV4[i])
-        for i in range(4)
-    ]
-    mac0 = b'@WRJ_1'
-    ip0 = '10.0.1.2'
+
+GRATUITOUS_ARPS = [
+    gratuitous_arp(i, IFACE_MAC[i], IFACE_IPV4[i])
+    for i in range(4)
+]
+
+
+def gen_arp():
+    mac0, ip0 = b'@WRJ_1', '10.0.1.2'
     arps = [
         Ether(src=mac0, dst=MAC_BROADCAST) / Dot1Q(id=IN, vlan=0)
         / ARP(op='who-has', hwsrc=mac0, psrc=ip0, hwdst=MAC_BROADCAST, pdst=IFACE_IPV4[0]),
         Ether(src=IFACE_MAC[0], dst=mac0) / Dot1Q(id=OUT, vlan=0)
         / ARP(op='is-at', hwsrc=IFACE_MAC[0], psrc=IFACE_IPV4[0], hwdst=mac0, pdst=ip0),
     ]
-    packets = gratuitous_arps + arps
+    packets = GRATUITOUS_ARPS + arps
     wrpcap("arp.pcap", packets)
+
+
+def gen_ipv4():
+    mac0, ip0 = b'@WRJ_1', '10.0.1.2'
+    ip1 = '10.0.2.2'
+    packets = GRATUITOUS_ARPS + [
+        Ether(src=mac0, dst=IFACE_MAC[0]) / Dot1Q(id=IN, vlan=0)
+        / IP(src=ip0, dst=ip1, ttl=1),
+        Ether(src=IFACE_MAC[0], dst=mac0) / Dot1Q(id=OUT, vlan=0)
+        / IP(src=IFACE_IPV4[0], dst=ip0, ttl=64, id=0, flags=['DF'])
+        / ICMP(type='time-exceeded', code='ttl-zero-during-transit'),
+    ]
+    wrpcap("ipv4.pcap", packets)
 
 
 gen_icmp()
@@ -97,3 +112,4 @@ gen_tcp()
 gen_frag()
 
 gen_arp()
+gen_ipv4()

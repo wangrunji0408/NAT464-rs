@@ -58,8 +58,13 @@ fn test46(name: &str) {
 }
 
 #[test]
-fn test_arp() {
+fn nat_arp() {
     test_nat("arp");
+}
+
+#[test]
+fn nat_ipv4() {
+    test_nat("ipv4");
 }
 
 fn test_nat(name: &str) {

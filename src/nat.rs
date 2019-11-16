@@ -1,6 +1,7 @@
 //! The core of Network Address Translation (NAT) logic
 
 use crate::hal::{HALError, HAL};
+use smoltcp::phy::{Checksum, ChecksumCapabilities};
 use smoltcp::wire::*;
 use smoltcp::Error as NetError;
 
@@ -30,7 +31,7 @@ impl<H: HAL> NAT<H> {
                     self.process_arp(meta.iface_id, frame.into_inner())?;
                 }
                 EthernetProtocol::Ipv4 => {
-                    self.process_ipv4(frame.payload_mut());
+                    self.process_ipv4(meta.iface_id, frame.into_inner())?;
                 }
                 EthernetProtocol::Ipv6 => {
                     self.process_ipv6(frame.payload_mut());
@@ -110,12 +111,67 @@ impl<H: HAL> NAT<H> {
         }
         Ok(())
     }
+
     /// Process IPv6 NDP packet
     fn process_ndp(&mut self, _ndp_buf: &[u8]) {}
+
     /// Process IPv4 packet
-    fn process_ipv4(&mut self, _ipv4_buf: &[u8]) {}
+    fn process_ipv4(&mut self, iface_id: usize, recv_buf: &[u8]) -> NATResult<()> {
+        let frame_in = EthernetFrame::new_unchecked(recv_buf);
+        let ipv4_in = Ipv4Packet::new_checked(frame_in.payload())?;
+
+        // If the packet is going to be forwarded and its hop limit is 1,
+        // send an ICMP error message (Time exceeded).
+        if self.is_forward(ipv4_in.dst_addr()) && ipv4_in.hop_limit() == 1 {
+            const MAX_ICMP_PACKET_LEN: usize = 14 + 20 + 8;
+            let mut send_buf = [0u8; MAX_ICMP_PACKET_LEN];
+
+            let mut frame = EthernetFrame::new_unchecked(&mut send_buf[..]);
+            frame.set_src_addr(self.ifaces[iface_id].mac);
+            frame.set_dst_addr(frame_in.src_addr());
+            frame.set_ethertype(EthernetProtocol::Ipv4);
+
+            let mut ipv4 = Ipv4Packet::new_unchecked(frame.payload_mut());
+            Ipv4Repr {
+                src_addr: self.ifaces[iface_id].ipv4,
+                dst_addr: ipv4_in.src_addr(),
+                protocol: IpProtocol::Icmp,
+                payload_len: 8,
+                hop_limit: 64,
+            }
+            .emit(&mut ipv4, &{
+                let mut cap = ChecksumCapabilities::ignored();
+                cap.ipv4 = Checksum::Tx;
+                cap
+            });
+
+            let mut icmp = Icmpv4Packet::new_unchecked(ipv4.payload_mut());
+            icmp.set_msg_type(Icmpv4Message::TimeExceeded);
+            icmp.set_msg_code(Icmpv4TimeExceeded::TtlExpired.into());
+            icmp.set_echo_ident(0);
+            icmp.set_echo_seq_no(0);
+            icmp.fill_checksum();
+
+            self.hal.send_packet(iface_id, &send_buf)?;
+        }
+
+        // TODO: If the packet that is an IPv6 packet or has DF bit set is going
+        //       to be translated and forwarded, and it would be too big after
+        //       translation, send an ICMP error message (Packet Too Big).
+
+        Ok(())
+    }
+
     /// Process IPv6 packet
     fn process_ipv6(&mut self, _ipv6_buf: &[u8]) {}
+
+    /// Whether `dst_ipv4` is going to be forwarded.
+    fn is_forward(&self, dst_ipv4: Ipv4Address) -> bool {
+        self.ifaces
+            .iter()
+            .find(|iface| iface.ipv4 == dst_ipv4)
+            .is_none()
+    }
 }
 
 /// A specialized Result type for [`NAT`](struct.NAT.html).
