@@ -1,5 +1,6 @@
 //! The core of Network Address Translation (NAT) logic
 
+use crate::checksum::{checksum, checksum_final};
 use crate::hal::{HALError, HAL};
 use smoltcp::phy::{Checksum, ChecksumCapabilities};
 use smoltcp::wire::*;
@@ -25,7 +26,7 @@ impl<H: HAL> NAT<H> {
         let mut recv_buf = [0u8; 0x1000];
         loop {
             let meta = self.hal.recv_packet(&mut recv_buf)?;
-            let mut frame = EthernetFrame::new_unchecked(&mut recv_buf[..]);
+            let frame = EthernetFrame::new_unchecked(&mut recv_buf[..]);
             match frame.ethertype() {
                 EthernetProtocol::Arp => {
                     self.process_arp(meta.iface_id, frame.into_inner())?;
@@ -34,7 +35,7 @@ impl<H: HAL> NAT<H> {
                     self.process_ipv4(meta.iface_id, frame.into_inner())?;
                 }
                 EthernetProtocol::Ipv6 => {
-                    self.process_ipv6(frame.payload_mut());
+                    self.process_ipv6(meta.iface_id, frame.into_inner())?;
                 }
                 EthernetProtocol::Unknown(type_) => {
                     warn!("unknown ethernet type: {}", type_);
@@ -113,7 +114,9 @@ impl<H: HAL> NAT<H> {
     }
 
     /// Process IPv6 NDP packet
-    fn process_ndp(&mut self, _ndp_buf: &[u8]) {}
+    fn process_ndp(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        unimplemented!()
+    }
 
     /// Process IPv4 packet
     fn process_ipv4(&mut self, iface_id: usize, recv_buf: &[u8]) -> NATResult<()> {
@@ -122,7 +125,7 @@ impl<H: HAL> NAT<H> {
 
         // If the packet is going to be forwarded and its hop limit is 1,
         // send an ICMP error message (Time exceeded).
-        if self.is_forward(ipv4_in.dst_addr()) && ipv4_in.hop_limit() == 1 {
+        if self.is_forward4(ipv4_in.dst_addr()) && ipv4_in.hop_limit() == 1 {
             const MAX_ICMP_PACKET_LEN: usize = 14 + 20 + 8;
             let mut send_buf = [0u8; MAX_ICMP_PACKET_LEN];
 
@@ -163,13 +166,84 @@ impl<H: HAL> NAT<H> {
     }
 
     /// Process IPv6 packet
-    fn process_ipv6(&mut self, _ipv6_buf: &[u8]) {}
+    fn process_ipv6(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        let mut frame_in = EthernetFrame::new_unchecked(recv_buf);
+        let ipv6_in = Ipv6Packet::new_checked(frame_in.payload_mut())?;
+
+        if self.is_forward6(ipv6_in.dst_addr()) {
+            unimplemented!("forward ipv6");
+        } else {
+            match ipv6_in.next_header() {
+                IpProtocol::Icmpv6 => self.process_icmpv6(iface_id, frame_in.into_inner())?,
+                _ => unimplemented!("other ipv6 type"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Process ICMPv6 packet
+    fn process_icmpv6(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        let mut frame = EthernetFrame::new_unchecked(recv_buf);
+        let mut ipv6 = Ipv6Packet::new_unchecked(frame.payload_mut());
+        let icmpv6 = Icmpv6Packet::new_checked(ipv6.payload_mut())?;
+
+        match icmpv6.msg_type() {
+            Icmpv6Message::EchoRequest => {
+                self.process_icmpv6_echo(iface_id, frame.into_inner())?;
+            }
+            Icmpv6Message::NeighborSolicit | Icmpv6Message::NeighborAdvert => {
+                self.process_ndp(iface_id, frame.into_inner())?;
+            }
+            t => {
+                warn!("unknown ICMPv6 type: {:?}", t);
+                return Err(NATError::Netstack(NetError::Unrecognized));
+            }
+        }
+        Ok(())
+    }
+
+    /// Process ICMPv6 echo request.
+    ///
+    /// The `recv_buf` must contain a valid ICMPv6 Echo Request packet.
+    /// And it will be modified inplace to construct a reply packet.
+    fn process_icmpv6_echo(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        let mut frame = EthernetFrame::new_unchecked(recv_buf);
+        frame.set_dst_addr(frame.src_addr());
+        frame.set_src_addr(self.ifaces[iface_id].mac);
+
+        let mut ipv6 = Ipv6Packet::new_unchecked(frame.payload_mut());
+        let checksum_delta = checksum(self.ifaces[iface_id].ipv6.as_bytes())
+            - checksum(ipv6.dst_addr().as_bytes())
+            + ((u8::from(Icmpv6Message::EchoReply) as u32) << 8)
+            - ((u8::from(Icmpv6Message::EchoRequest) as u32) << 8);
+
+        ipv6.set_dst_addr(ipv6.src_addr());
+        ipv6.set_src_addr(self.ifaces[iface_id].ipv6);
+        ipv6.set_hop_limit(64);
+
+        let mut icmpv6 = Icmpv6Packet::new_unchecked(ipv6.payload_mut());
+        icmpv6.set_msg_type(Icmpv6Message::EchoReply);
+        // incrementally update the checksum
+        icmpv6.set_checksum(checksum_final(!icmpv6.checksum() as u32 + checksum_delta));
+
+        let len = 14 + ipv6.total_len();
+        self.hal.send_packet(iface_id, &frame.into_inner()[..len])?;
+        Ok(())
+    }
 
     /// Whether `dst_ipv4` is going to be forwarded.
-    fn is_forward(&self, dst_ipv4: Ipv4Address) -> bool {
+    fn is_forward4(&self, dst_ipv4: Ipv4Address) -> bool {
         self.ifaces
             .iter()
             .find(|iface| iface.ipv4 == dst_ipv4)
+            .is_none()
+    }
+
+    /// Whether `dst_ipv6` is going to be forwarded.
+    fn is_forward6(&self, dst_ipv6: Ipv6Address) -> bool {
+        self.ifaces
+            .iter()
+            .find(|iface| iface.ipv6 == dst_ipv6)
             .is_none()
     }
 }

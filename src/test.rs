@@ -67,6 +67,11 @@ fn nat_ipv4() {
     test_nat("ipv4");
 }
 
+#[test]
+fn nat_icmpv6() {
+    test_nat("icmpv6");
+}
+
 fn test_nat(name: &str) {
     let pcap_in = open_pcap_in(&format!("{}.pcap", name));
     let pcap_out = create_pcap_out(&format!("{}.output.pcap", name));
@@ -81,22 +86,22 @@ fn test_nat(name: &str) {
             IFaceConfig {
                 mac: EthernetAddress::from_bytes(b"TWD2_0"),
                 ipv4: Ipv4Address::new(10, 0, 1, 1),
-                ipv6: Default::default(),
+                ipv6: Ipv6Address::new(1, 0, 0, 0, 0, 0, 0, 0x10),
             },
             IFaceConfig {
                 mac: EthernetAddress::from_bytes(b"TWD2_1"),
                 ipv4: Ipv4Address::new(10, 0, 2, 1),
-                ipv6: Default::default(),
+                ipv6: Ipv6Address::new(1, 0, 0, 0, 0, 0, 0, 0x20),
             },
             IFaceConfig {
                 mac: EthernetAddress::from_bytes(b"TWD2_2"),
                 ipv4: Ipv4Address::new(10, 0, 3, 1),
-                ipv6: Default::default(),
+                ipv6: Ipv6Address::new(1, 0, 0, 0, 0, 0, 0, 0x30),
             },
             IFaceConfig {
                 mac: EthernetAddress::from_bytes(b"TWD2_3"),
                 ipv4: Ipv4Address::new(10, 0, 4, 1),
-                ipv6: Default::default(),
+                ipv6: Ipv6Address::new(1, 0, 0, 0, 0, 0, 0, 0x40),
             },
         ],
     };
