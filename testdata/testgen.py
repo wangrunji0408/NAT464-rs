@@ -98,11 +98,20 @@ def gen_ipv4():
     mac0, ip0 = b'@WRJ_1', '10.0.1.2'
     ip1 = '10.0.2.2'
     packets = GRATUITOUS_ARPS + [
+        # TTL == 1
         Ether(src=mac0, dst=IFACE_MAC[0]) / Dot1Q(id=IN, vlan=0)
         / IP(src=ip0, dst=ip1, ttl=1),
         Ether(src=IFACE_MAC[0], dst=mac0) / Dot1Q(id=OUT, vlan=0)
         / IP(src=IFACE_IPV4[0], dst=ip0, ttl=64, id=0, flags=['DF'])
         / ICMP(type='time-exceeded', code='ttl-zero-during-transit'),
+
+        # ICMP Echo Request
+        Ether(src=mac0, dst=IFACE_MAC[0]) / Dot1Q(id=IN, vlan=0)
+        / IP(src=ip0, dst=IFACE_IPV4[0])
+        / ICMP(type='echo-request', id=1, seq=2) / b'hello',
+        Ether(src=IFACE_MAC[0], dst=mac0) / Dot1Q(id=OUT, vlan=0)
+        / IP(src=IFACE_IPV4[0], dst=ip0, ttl=64)
+        / ICMP(type='echo-reply', id=1, seq=2) / b'hello',
     ]
     wrpcap("ipv4.pcap", packets)
 

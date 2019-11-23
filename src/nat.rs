@@ -119,43 +119,25 @@ impl<H: HAL> NAT<H> {
     }
 
     /// Process IPv4 packet
-    fn process_ipv4(&mut self, iface_id: usize, recv_buf: &[u8]) -> NATResult<()> {
-        let frame_in = EthernetFrame::new_unchecked(recv_buf);
+    fn process_ipv4(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        let frame_in = EthernetFrame::new_unchecked(&recv_buf);
         let ipv4_in = Ipv4Packet::new_checked(frame_in.payload())?;
 
-        // If the packet is going to be forwarded and its hop limit is 1,
-        // send an ICMP error message (Time exceeded).
-        if self.is_forward4(ipv4_in.dst_addr()) && ipv4_in.hop_limit() == 1 {
-            const MAX_ICMP_PACKET_LEN: usize = 14 + 20 + 8;
-            let mut send_buf = [0u8; MAX_ICMP_PACKET_LEN];
-
-            let mut frame = EthernetFrame::new_unchecked(&mut send_buf[..]);
-            frame.set_src_addr(self.ifaces[iface_id].mac);
-            frame.set_dst_addr(frame_in.src_addr());
-            frame.set_ethertype(EthernetProtocol::Ipv4);
-
-            let mut ipv4 = Ipv4Packet::new_unchecked(frame.payload_mut());
-            Ipv4Repr {
-                src_addr: self.ifaces[iface_id].ipv4,
-                dst_addr: ipv4_in.src_addr(),
-                protocol: IpProtocol::Icmp,
-                payload_len: 8,
-                hop_limit: 64,
+        if self.is_forward4(ipv4_in.dst_addr()) {
+            if ipv4_in.hop_limit() == 1 {
+                self.send_icmpv4(
+                    iface_id,
+                    frame_in.src_addr(),
+                    ipv4_in.src_addr(),
+                    Icmpv4Message::TimeExceeded,
+                    Icmpv4TimeExceeded::TtlExpired.into(),
+                )?;
             }
-            .emit(&mut ipv4, &{
-                let mut cap = ChecksumCapabilities::ignored();
-                cap.ipv4 = Checksum::Tx;
-                cap
-            });
-
-            let mut icmp = Icmpv4Packet::new_unchecked(ipv4.payload_mut());
-            icmp.set_msg_type(Icmpv4Message::TimeExceeded);
-            icmp.set_msg_code(Icmpv4TimeExceeded::TtlExpired.into());
-            icmp.set_echo_ident(0);
-            icmp.set_echo_seq_no(0);
-            icmp.fill_checksum();
-
-            self.hal.send_packet(iface_id, &send_buf)?;
+        } else {
+            match ipv4_in.protocol() {
+                IpProtocol::Icmp => self.process_icmpv4(iface_id, recv_buf)?,
+                _ => unimplemented!("other ipv4 type"),
+            }
         }
 
         // TODO: If the packet that is an IPv6 packet or has DF bit set is going
@@ -165,16 +147,106 @@ impl<H: HAL> NAT<H> {
         Ok(())
     }
 
+    /// Send an ICMPv4 message (with `icmp_type` and `icmp_code`)
+    /// to a destination (with `dst_mac` and `dst_ipv4`).
+    fn send_icmpv4(
+        &mut self,
+        iface_id: usize,
+        dst_mac: EthernetAddress,
+        dst_ipv4: Ipv4Address,
+        icmp_type: Icmpv4Message,
+        icmp_code: u8,
+    ) -> NATResult<()> {
+        const MAX_ICMP_PACKET_LEN: usize = 14 + 20 + 8;
+        let mut send_buf = [0u8; MAX_ICMP_PACKET_LEN];
+
+        let mut frame = EthernetFrame::new_unchecked(&mut send_buf[..]);
+        frame.set_src_addr(self.ifaces[iface_id].mac);
+        frame.set_dst_addr(dst_mac);
+        frame.set_ethertype(EthernetProtocol::Ipv4);
+
+        let mut ipv4 = Ipv4Packet::new_unchecked(frame.payload_mut());
+        Ipv4Repr {
+            src_addr: self.ifaces[iface_id].ipv4,
+            dst_addr: dst_ipv4,
+            protocol: IpProtocol::Icmp,
+            payload_len: 8,
+            hop_limit: 64,
+        }
+        .emit(&mut ipv4, &{
+            let mut cap = ChecksumCapabilities::ignored();
+            cap.ipv4 = Checksum::Tx;
+            cap
+        });
+
+        let mut icmp = Icmpv4Packet::new_unchecked(ipv4.payload_mut());
+        icmp.set_msg_type(icmp_type);
+        icmp.set_msg_code(icmp_code);
+        icmp.set_echo_ident(0);
+        icmp.set_echo_seq_no(0);
+        icmp.fill_checksum();
+
+        self.hal.send_packet(iface_id, &send_buf)?;
+        Ok(())
+    }
+
+    /// Process ICMPv4 packet
+    fn process_icmpv4(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        let frame = EthernetFrame::new_unchecked(&recv_buf);
+        let ipv4 = Ipv4Packet::new_unchecked(frame.payload());
+        let icmpv4 = Icmpv4Packet::new_checked(ipv4.payload())?;
+
+        match icmpv4.msg_type() {
+            Icmpv4Message::EchoRequest => {
+                self.process_icmpv4_echo(iface_id, recv_buf)?;
+            }
+            t => {
+                warn!("unknown ICMPv4 type: {:?}", t);
+                return Err(NATError::Netstack(NetError::Unrecognized));
+            }
+        }
+        Ok(())
+    }
+
+    /// Process ICMPv4 echo request.
+    ///
+    /// The `recv_buf` must contain a valid ICMPv4 Echo Request packet.
+    /// And it will be modified inplace to construct a reply packet.
+    fn process_icmpv4_echo(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        let mut frame = EthernetFrame::new_unchecked(recv_buf);
+        frame.set_dst_addr(frame.src_addr());
+        frame.set_src_addr(self.ifaces[iface_id].mac);
+
+        let mut ipv4 = Ipv4Packet::new_unchecked(frame.payload_mut());
+        let checksum_delta = checksum(self.ifaces[iface_id].ipv4.as_bytes())
+            - checksum(ipv4.dst_addr().as_bytes())
+            + ((u8::from(Icmpv4Message::EchoReply) as u32) << 8)
+            - ((u8::from(Icmpv4Message::EchoRequest) as u32) << 8);
+
+        ipv4.set_dst_addr(ipv4.src_addr());
+        ipv4.set_src_addr(self.ifaces[iface_id].ipv4);
+        ipv4.set_hop_limit(64);
+
+        let mut icmpv4 = Icmpv4Packet::new_unchecked(ipv4.payload_mut());
+        icmpv4.set_msg_type(Icmpv4Message::EchoReply);
+        // incrementally update the checksum
+        icmpv4.set_checksum(checksum_final(!icmpv4.checksum() as u32 + checksum_delta));
+
+        let len = 14 + ipv4.total_len() as usize;
+        self.hal.send_packet(iface_id, &frame.into_inner()[..len])?;
+        Ok(())
+    }
+
     /// Process IPv6 packet
     fn process_ipv6(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
-        let mut frame_in = EthernetFrame::new_unchecked(recv_buf);
-        let ipv6_in = Ipv6Packet::new_checked(frame_in.payload_mut())?;
+        let frame_in = EthernetFrame::new_unchecked(&recv_buf);
+        let ipv6_in = Ipv6Packet::new_checked(frame_in.payload())?;
 
         if self.is_forward6(ipv6_in.dst_addr()) {
             unimplemented!("forward ipv6");
         } else {
             match ipv6_in.next_header() {
-                IpProtocol::Icmpv6 => self.process_icmpv6(iface_id, frame_in.into_inner())?,
+                IpProtocol::Icmpv6 => self.process_icmpv6(iface_id, recv_buf)?,
                 _ => unimplemented!("other ipv6 type"),
             }
         }
@@ -183,16 +255,16 @@ impl<H: HAL> NAT<H> {
 
     /// Process ICMPv6 packet
     fn process_icmpv6(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
-        let mut frame = EthernetFrame::new_unchecked(recv_buf);
-        let mut ipv6 = Ipv6Packet::new_unchecked(frame.payload_mut());
-        let icmpv6 = Icmpv6Packet::new_checked(ipv6.payload_mut())?;
+        let frame = EthernetFrame::new_unchecked(&recv_buf);
+        let ipv6 = Ipv6Packet::new_unchecked(frame.payload());
+        let icmpv6 = Icmpv6Packet::new_checked(ipv6.payload())?;
 
         match icmpv6.msg_type() {
             Icmpv6Message::EchoRequest => {
-                self.process_icmpv6_echo(iface_id, frame.into_inner())?;
+                self.process_icmpv6_echo(iface_id, recv_buf)?;
             }
             Icmpv6Message::NeighborSolicit | Icmpv6Message::NeighborAdvert => {
-                self.process_ndp(iface_id, frame.into_inner())?;
+                self.process_ndp(iface_id, recv_buf)?;
             }
             t => {
                 warn!("unknown ICMPv6 type: {:?}", t);
