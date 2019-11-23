@@ -116,15 +116,35 @@ def gen_ipv4():
     wrpcap("ipv4.pcap", packets)
 
 
+def solicited(addr):
+    addr = inet_pton(socket.AF_INET6, addr)
+    nsma = in6_getnsma(addr)
+    return inet_ntop(socket.AF_INET6, nsma)
+
+
+def nsmac(addr):
+    addr = inet_pton(socket.AF_INET6, addr)
+    return in6_getnsmac(addr)
+
+
 def gen_icmpv6():
     mac0, ip0 = b'@WRJ_1', '1::11'
     packets = GRATUITOUS_ARPS + [
+        # Echo Request
         Ether(src=mac0, dst=IFACE_MAC[0]) / Dot1Q(id=IN, vlan=0)
         / IPv6(src=ip0, dst=IFACE_IPV6[0])
         / ICMPv6EchoRequest(id=1, seq=2) / b'hello',
         Ether(src=IFACE_MAC[0], dst=mac0) / Dot1Q(id=OUT, vlan=0)
         / IPv6(src=IFACE_IPV6[0], dst=ip0)
         / ICMPv6EchoReply(id=1, seq=2) / b'hello',
+
+        # Neighbour Solicit
+        Ether(src=mac0, dst=nsmac(solicited(IFACE_IPV6[0]))) / Dot1Q(id=IN, vlan=0)
+        / IPv6(src=ip0, dst=solicited(IFACE_IPV6[0]))
+        / ICMPv6ND_NS(tgt=IFACE_IPV6[0]) / ICMPv6NDOptSrcLLAddr(lladdr=mac0),
+        Ether(src=IFACE_MAC[0], dst=mac0) / Dot1Q(id=OUT, vlan=0)
+        / IPv6(src=IFACE_IPV6[0], dst=ip0)
+        / ICMPv6ND_NA(tgt=IFACE_IPV6[0], R=1, S=1, O=0) / ICMPv6NDOptDstLLAddr(lladdr=IFACE_MAC[0]),
     ]
     wrpcap("icmpv6.pcap", packets)
 

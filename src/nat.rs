@@ -87,8 +87,12 @@ impl<H: HAL> NAT<H> {
 
             match operation {
                 ArpOperation::Request => {
-                    // reply (reuse input buffer)
                     let iface = &self.ifaces[iface_id];
+                    // not asking me?
+                    if arp.target_protocol_addr() != iface.ipv4.as_bytes() {
+                        return Ok(());
+                    }
+                    // reply (reuse input buffer)
                     arp.set_operation(ArpOperation::Reply);
                     arp.set_source_hardware_addr(iface.mac.as_bytes());
                     arp.set_source_protocol_addr(iface.ipv4.as_bytes());
@@ -98,10 +102,7 @@ impl<H: HAL> NAT<H> {
                     frame.set_src_addr(iface.mac);
                     self.hal.send_packet(iface_id, &frame.into_inner()[..42])?;
                 }
-                ArpOperation::Reply => {
-                    // update ARC for dst
-                    self.hal.arc_add_mac(IpAddress::Ipv4(dst_ipv4), dst_mac)?;
-                }
+                ArpOperation::Reply => {}
                 ArpOperation::Unknown(op) => {
                     warn!("unknown ARP operation: {}", op);
                     return Err(NATError::Netstack(NetError::Unrecognized));
@@ -111,11 +112,6 @@ impl<H: HAL> NAT<H> {
             unreachable!()
         }
         Ok(())
-    }
-
-    /// Process IPv6 NDP packet
-    fn process_ndp(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
-        unimplemented!()
     }
 
     /// Process IPv4 packet
@@ -265,7 +261,7 @@ impl<H: HAL> NAT<H> {
             Icmpv6Message::EchoRequest => {
                 self.process_icmpv6_echo(iface_id, recv_buf)?;
             }
-            Icmpv6Message::NeighborSolicit | Icmpv6Message::NeighborAdvert => {
+            t if t.is_ndisc() => {
                 self.process_ndp(iface_id, recv_buf)?;
             }
             t => {
@@ -307,6 +303,67 @@ impl<H: HAL> NAT<H> {
         Ok(())
     }
 
+    /// Process IPv6 NDP (Neighbor Discovery Protocol) packet.
+    ///
+    /// The `recv_buf` must contain a valid ICMPv6 NDP packet.
+    /// And it will be modified inplace to construct a reply packet.
+    fn process_ndp(&mut self, iface_id: usize, recv_buf: &mut [u8]) -> NATResult<()> {
+        let mut frame = EthernetFrame::new_unchecked(recv_buf);
+        let mut ipv6 = Ipv6Packet::new_unchecked(frame.payload_mut());
+
+        match NdiscRepr::parse(&Icmpv6Packet::new_unchecked(&ipv6.payload_mut()))? {
+            NdiscRepr::NeighborSolicit {
+                target_addr,
+                lladdr,
+            } => {
+                // update ARC for src
+                if let Some(src_mac) = lladdr {
+                    self.hal
+                        .arc_add_mac(IpAddress::Ipv6(ipv6.src_addr()), src_mac)?;
+                }
+                let iface = &self.ifaces[iface_id];
+                // not asking me?
+                if target_addr != iface.ipv6 {
+                    return Ok(());
+                }
+                // reply the request
+                let dst_addr = ipv6.src_addr();
+                let mut icmpv6 = Icmpv6Packet::new_unchecked(ipv6.payload_mut());
+                NdiscRepr::NeighborAdvert {
+                    flags: NdiscNeighborFlags::ROUTER | NdiscNeighborFlags::SOLICITED,
+                    target_addr: iface.ipv6,
+                    lladdr: Some(iface.mac),
+                }
+                .emit(&mut icmpv6);
+                icmpv6.fill_checksum(&IpAddress::Ipv6(iface.ipv6), &IpAddress::Ipv6(dst_addr));
+
+                ipv6.set_dst_addr(dst_addr);
+                ipv6.set_src_addr(iface.ipv6);
+                ipv6.set_hop_limit(255);
+                ipv6.set_payload_len(32);
+                ipv6.check_len()?;
+                let len = 14 + ipv6.total_len();
+                frame.set_dst_addr(frame.src_addr());
+                frame.set_src_addr(iface.mac);
+                self.hal.send_packet(iface_id, &frame.into_inner()[..len])?;
+            }
+            NdiscRepr::NeighborAdvert {
+                flags,
+                target_addr,
+                lladdr,
+            } => {
+                // update ARC
+                let lladdr = lladdr.ok_or(NetError::Illegal)?;
+                self.hal.arc_add_mac(IpAddress::Ipv6(target_addr), lladdr)?;
+            }
+            repr @ _ => {
+                warn!("unknown NDP packet: {:?}", repr);
+                return Err(NATError::Netstack(NetError::Unrecognized));
+            }
+        }
+        Ok(())
+    }
+
     /// Whether `dst_ipv4` is going to be forwarded.
     fn is_forward4(&self, dst_ipv4: Ipv4Address) -> bool {
         self.ifaces
@@ -319,8 +376,23 @@ impl<H: HAL> NAT<H> {
     fn is_forward6(&self, dst_ipv6: Ipv6Address) -> bool {
         self.ifaces
             .iter()
-            .find(|iface| iface.ipv6 == dst_ipv6)
+            .find(|iface| dst_ipv6 == iface.ipv6 || dst_ipv6 == iface.ipv6.solicited_multicast())
             .is_none()
+    }
+}
+
+trait Ipv6AddrExt {
+    fn solicited_multicast(&self) -> Ipv6Address;
+}
+
+impl Ipv6AddrExt for Ipv6Address {
+    /// The [solicited-node multicast address](snma) for the given address.
+    ///
+    /// [snma]: https://en.wikipedia.org/wiki/Solicited-node_multicast_address
+    fn solicited_multicast(&self) -> Ipv6Address {
+        let mut addr = Ipv6Cidr::SOLICITED_NODE_PREFIX.address();
+        addr.0[13..].copy_from_slice(&self.0[13..]);
+        addr
     }
 }
 
