@@ -35,9 +35,10 @@ impl Translator {
         let ipv6_payload = Self::frags_4to6(&ipv4, &mut ipv6)?;
 
         // for incrementally updating checksum on UDP & TCP header
-        let checksum_delta = checksum(src_addr6.as_bytes()) + checksum(dst_addr6.as_bytes())
-            - checksum(ipv4.src_addr().as_bytes())
-            - checksum(ipv4.dst_addr().as_bytes());
+        let checksum_delta = checksum(src_addr6.as_bytes())
+            .wrapping_add(checksum(dst_addr6.as_bytes()))
+            .wrapping_sub(checksum(ipv4.src_addr().as_bytes()))
+            .wrapping_sub(checksum(ipv4.dst_addr().as_bytes()));
 
         // translate upper-layer protocol data
         if ipv4.frag_offset() == 0 {
@@ -50,12 +51,16 @@ impl Translator {
                 IpProtocol::Udp => {
                     ipv6_payload.copy_from_slice(ipv4.payload());
                     let mut udp = UdpPacket::new_unchecked(ipv6_payload);
-                    udp.set_checksum(checksum_final(!udp.checksum() as u32 + checksum_delta));
+                    udp.set_checksum(checksum_final(
+                        (!udp.checksum() as u32).wrapping_add(checksum_delta),
+                    ));
                 }
                 IpProtocol::Tcp => {
                     ipv6_payload.copy_from_slice(ipv4.payload());
                     let mut tcp = TcpPacket::new_unchecked(ipv6_payload);
-                    tcp.set_checksum(checksum_final(!tcp.checksum() as u32 + checksum_delta));
+                    tcp.set_checksum(checksum_final(
+                        (!tcp.checksum() as u32).wrapping_add(checksum_delta),
+                    ));
                 }
                 _ => {
                     ipv6_payload.copy_from_slice(ipv4.payload());

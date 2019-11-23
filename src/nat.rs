@@ -219,9 +219,9 @@ impl<H: HAL> NAT<H> {
 
         let mut ipv4 = Ipv4Packet::new_unchecked(frame.payload_mut());
         let checksum_delta = checksum(self.ifaces[iface_id].ipv4.as_bytes())
-            - checksum(ipv4.dst_addr().as_bytes())
-            + ((u8::from(Icmpv4Message::EchoReply) as u32) << 8)
-            - ((u8::from(Icmpv4Message::EchoRequest) as u32) << 8);
+            .wrapping_sub(checksum(ipv4.dst_addr().as_bytes()))
+            .wrapping_add((u8::from(Icmpv4Message::EchoReply) as u32) << 8)
+            .wrapping_sub((u8::from(Icmpv4Message::EchoRequest) as u32) << 8);
 
         ipv4.set_dst_addr(ipv4.src_addr());
         ipv4.set_src_addr(self.ifaces[iface_id].ipv4);
@@ -230,7 +230,9 @@ impl<H: HAL> NAT<H> {
         let mut icmpv4 = Icmpv4Packet::new_unchecked(ipv4.payload_mut());
         icmpv4.set_msg_type(Icmpv4Message::EchoReply);
         // incrementally update the checksum
-        icmpv4.set_checksum(checksum_final(!icmpv4.checksum() as u32 + checksum_delta));
+        icmpv4.set_checksum(checksum_final(
+            (!icmpv4.checksum() as u32).wrapping_add(checksum_delta),
+        ));
 
         let len = 14 + ipv4.total_len() as usize;
         self.hal.send_packet(iface_id, &frame.into_inner()[..len])?;
@@ -285,9 +287,9 @@ impl<H: HAL> NAT<H> {
 
         let mut ipv6 = Ipv6Packet::new_unchecked(frame.payload_mut());
         let checksum_delta = checksum(self.ifaces[iface_id].ipv6.as_bytes())
-            - checksum(ipv6.dst_addr().as_bytes())
-            + ((u8::from(Icmpv6Message::EchoReply) as u32) << 8)
-            - ((u8::from(Icmpv6Message::EchoRequest) as u32) << 8);
+            .wrapping_sub(checksum(ipv6.dst_addr().as_bytes()))
+            .wrapping_add((u8::from(Icmpv6Message::EchoReply) as u32) << 8)
+            .wrapping_sub((u8::from(Icmpv6Message::EchoRequest) as u32) << 8);
 
         ipv6.set_dst_addr(ipv6.src_addr());
         ipv6.set_src_addr(self.ifaces[iface_id].ipv6);
@@ -296,7 +298,9 @@ impl<H: HAL> NAT<H> {
         let mut icmpv6 = Icmpv6Packet::new_unchecked(ipv6.payload_mut());
         icmpv6.set_msg_type(Icmpv6Message::EchoReply);
         // incrementally update the checksum
-        icmpv6.set_checksum(checksum_final(!icmpv6.checksum() as u32 + checksum_delta));
+        icmpv6.set_checksum(checksum_final(
+            (!icmpv6.checksum() as u32).wrapping_add(checksum_delta),
+        ));
 
         let len = 14 + ipv6.total_len();
         self.hal.send_packet(iface_id, &frame.into_inner()[..len])?;
