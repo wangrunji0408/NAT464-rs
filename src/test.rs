@@ -158,7 +158,7 @@ impl HAL for TestHAL {
         unimplemented!()
     }
 
-    fn amc_get(&self, _ip: IpAddress) -> HALResult<&IpAddress> {
+    fn amc_get(&self, _ip: IpAddress) -> HALResult<IpAddress> {
         unimplemented!()
     }
 
@@ -166,15 +166,15 @@ impl HAL for TestHAL {
         unimplemented!()
     }
 
-    fn fib_get(&self, _ip: IpAddress) -> HALResult<&IpAddress> {
+    fn fib_get(&self, _ip: IpAddress) -> HALResult<IpAddress> {
         unimplemented!()
     }
 
-    fn fib_add(&mut self, _ip: IpAddress, _next_hop: IpAddress) -> HALResult<()> {
+    fn fib_add(&mut self, _ip: IpCidr, _next_hop: IpAddress) -> HALResult<()> {
         unimplemented!()
     }
 
-    fn arc_get_mac(&self, ip: &IpAddress) -> HALResult<&EthernetAddress> {
+    fn arc_get_mac(&self, ip: &IpAddress) -> HALResult<EthernetAddress> {
         let mac = self.arc.get(ip).ok_or(HALError::NotFound)?;
         Ok(mac)
     }

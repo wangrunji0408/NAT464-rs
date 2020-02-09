@@ -13,3 +13,4 @@ mod test;
 
 pub use hal::*;
 pub use nat::*;
+pub use smoltcp;
